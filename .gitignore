@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# Release artifacts
+*.tar.gz
+*.zip
+
 # macOS
 .DS_Store
 .AppleDouble
