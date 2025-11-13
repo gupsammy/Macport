@@ -3,10 +3,6 @@
 **/*.rs.bk
 *.pdb
 
-# Release artifacts
-*.tar.gz
-*.zip
-
 # macOS
 .DS_Store
 .AppleDouble
@@ -21,3 +17,5 @@
 
 # Configuration (users should generate their own)
 .macport.json
+
+PROJECT_INDEX.json
