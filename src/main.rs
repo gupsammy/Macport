@@ -589,16 +589,16 @@ fn scan_ports(port_ranges: &[(u16, u16)]) -> Result<Vec<ProcessInfo>> {
                 current_cmd = Some(val.trim().to_string());
             }
             "n" => {
-                if let (Some(pid), Some(cmd)) = (current_pid, current_cmd.as_ref()) {
-                    if let Some(port) = parse_port_from_lsof(val.trim()) {
-                        if in_ranges(port, port_ranges) && seen.insert((port, pid)) {
-                            results.push(ProcessInfo {
-                                port,
-                                pid,
-                                command: cmd.clone(),
-                            });
-                        }
-                    }
+                if let (Some(pid), Some(cmd)) = (current_pid, current_cmd.as_ref())
+                    && let Some(port) = parse_port_from_lsof(val.trim())
+                    && in_ranges(port, port_ranges)
+                    && seen.insert((port, pid))
+                {
+                    results.push(ProcessInfo {
+                        port,
+                        pid,
+                        command: cmd.clone(),
+                    });
                 }
             }
             _ => {}
@@ -759,8 +759,8 @@ fn build_menu_with_context(state: &AppState) -> Result<Menu> {
         let mut total = 0usize;
         for (project, items) in by_project {
             let header = MenuItem::with_id(
-                &format!("header_{}", project),
-                &format!("— {} —", project),
+                format!("header_{}", project),
+                format!("— {} —", project),
                 false,
                 None,
             );
@@ -931,18 +931,17 @@ fn query_docker_port_map() -> Result<HashMap<u16, DockerContainerInfo>> {
         // PORTS usually like: 0.0.0.0:5432->5432/tcp, :::5432->5432/tcp
         for seg in ports.split(',') {
             let seg = seg.trim();
-            if let Some((left, _right)) = seg.split_once("->") {
-                if let Some((_, host)) = left.rsplit_once(':') {
-                    if let Ok(p) = host.parse::<u16>() {
-                        map.insert(
-                            p,
-                            DockerContainerInfo {
-                                name: name.clone(),
-                                id: id.clone(),
-                            },
-                        );
-                    }
-                }
+            if let Some((left, _right)) = seg.split_once("->")
+                && let Some((_, host)) = left.rsplit_once(':')
+                && let Ok(p) = host.parse::<u16>()
+            {
+                map.insert(
+                    p,
+                    DockerContainerInfo {
+                        name: name.clone(),
+                        id: id.clone(),
+                    },
+                );
             }
         }
     }
@@ -998,14 +997,14 @@ fn run_brew_stop(service: &str) -> KillFeedback {
     }
 }
 
-fn maybe_notify_changes(state: &AppState, prev: &Vec<ProcessInfo>) {
+fn maybe_notify_changes(state: &AppState, prev: &[ProcessInfo]) {
     if !state.config.notifications_enabled {
         return;
     }
-    if let Some(until) = state.snooze_until {
-        if Instant::now() < until {
-            return;
-        }
+    if let Some(until) = state.snooze_until
+        && Instant::now() < until
+    {
+        return;
     }
     let prev_ports: HashSet<u16> = prev.iter().map(|p| p.port).collect();
     let curr_ports: HashSet<u16> = state.processes.iter().map(|p| p.port).collect();
@@ -1187,7 +1186,7 @@ enum FeedbackSeverity {
     Error,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct AppState {
     processes: Vec<ProcessInfo>,
     last_feedback: Option<KillFeedback>,
@@ -1195,19 +1194,6 @@ struct AppState {
     project_cache: HashMap<i32, ProjectInfo>,
     docker_port_map: HashMap<u16, DockerContainerInfo>,
     snooze_until: Option<Instant>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            processes: Vec::new(),
-            last_feedback: None,
-            config: Config::default(),
-            project_cache: HashMap::new(),
-            docker_port_map: HashMap::new(),
-            snooze_until: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1222,11 +1208,13 @@ enum KillOutcome {
 #[derive(Clone, Debug)]
 struct ProjectInfo {
     name: String,
+    #[allow(dead_code)]
     path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
 struct DockerContainerInfo {
     name: String,
+    #[allow(dead_code)]
     id: String,
 }
