@@ -2,27 +2,19 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    types: [opened, ready_for_review, reopened, synchronize]
+    # Only run on Rust source changes
+    paths:
+      - "src/**/*.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write # Enable inline comments
       id-token: write
 
     steps:
@@ -36,22 +28,69 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Enable progress tracking for better UX
+          track_progress: true
+
+          # Allow all bots to trigger reviews
+          allowed_bots: "*"
+
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
+            Perform a focused, pragmatic code review with a high-velocity builder mindset.
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            ## 1. Critical Issues Only (Must Block)
+            - **Security vulnerabilities**:
+              - Unsafe Rust code without justification
+              - Process/signal handling bugs that could cause crashes
+              - Permission/privilege escalation issues (macOS system tray app)
+              - Command injection in `lsof` or `ps` parsing
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            - **Core experience breakers**:
+              - App won't build or crashes on startup
+              - Tray icon doesn't show or is broken
+              - Process termination doesn't work
+              - Memory leaks or runaway threads
+              - UI freezing or unresponsiveness
 
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+            - **Visual/UX regressions**:
+              - Icon rendering issues (template mode, dark/light theme)
+              - Menu broken or confusing
+              - Tooltip feedback unclear or missing
 
+            ## 2. Nice-to-Haves (Don't Block, Just Suggest)
+            - Code organization and readability improvements
+            - Better error messages or logging
+            - Performance optimizations that aren't critical
+            - Additional features or polish
+
+            ## 3. Explicitly OK to Skip
+            - Perfect error handling for unlikely edge cases
+            - Exhaustive testing of all code paths
+            - Over-abstraction or premature optimization
+            - Idiomatic Rust patterns if current code works fine
+            - Documentation for obvious code
+            - Supporting non-macOS platforms (this is macOS-only)
+
+            ## Review Approach
+            1. **Start positive**: Call out what works well
+            2. **Inline comments**: Use for specific issues with file/line references
+            3. **Top-level summary**: Critical issues + quick suggestions
+            4. **Be pragmatic**: If it works and doesn't break core experience, approve it
+            5. **Educational tone**: Explain *why* something matters, but keep it brief
+
+            ## Rust-Specific Focus Areas
+            - Thread safety (crossbeam channels, Arc/Mutex usage)
+            - Signal handling correctness (SIGTERM/SIGKILL flow)
+            - Error propagation (anyhow usage)
+            - macOS API usage (lsof, ps, kill commands)
+            - System tray integration (tray-icon, winit event loop)
+
+            Use the repository's CLAUDE.md for project-specific architecture details.
+
+            **If everything looks good and works, say so clearly and approve!**
+
+          # Tools for comprehensive review with inline comments and gh CLI
+          claude_args: '--allowed-tools "mcp__github_inline_comment__create_inline_comment,Bash(gh:*), Bash(cargo:*)"'

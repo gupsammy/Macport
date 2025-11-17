@@ -14,7 +14,7 @@
 *.swp
 *.swo
 *~
-
+/docs/
 # Configuration (users should generate their own)
 .macport.json
 
