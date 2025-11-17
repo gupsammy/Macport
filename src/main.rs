@@ -157,6 +157,9 @@ fn main() -> Result<()> {
                 state.docker_port_map = query_docker_port_map().unwrap_or_default();
                 // Derive project info in best-effort mode
                 refresh_projects_for(&mut state);
+                // Clean up stale cache entries for terminated processes
+                let active_pids: HashSet<i32> = state.processes.iter().map(|p| p.pid).collect();
+                state.project_cache.retain(|pid, _| active_pids.contains(pid));
                 // Notifications on change
                 maybe_notify_changes(&state, &prev);
                 sync_menu_with_context(&tray_icon, &state);
