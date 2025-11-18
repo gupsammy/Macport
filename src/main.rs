@@ -64,7 +64,7 @@ impl Default for Config {
                 (5001, 5010),   // Flask, general dev servers (excluding 5000)
                 (5173, 5173),   // Vite default
                 (5432, 5432),   // PostgreSQL
-                (6379, 6379),   // Redis
+                (6379, 6380),   // Redis (6379 default, 6380 for testing)
                 (8000, 8100),   // Django, Python HTTP servers
                 (8080, 8090),   // Tomcat, alternative HTTP
                 (9000, 9010),   // Various dev tools
@@ -113,6 +113,7 @@ fn main() -> Result<()> {
         config: config.clone(),
         project_cache: HashMap::new(),
         docker_port_map: HashMap::new(),
+        brew_services_map: HashMap::new(),
         snooze_until: None,
     };
 
@@ -120,13 +121,11 @@ fn main() -> Result<()> {
         .build()
         .context("failed to create event loop")?;
     let proxy = event_loop.create_proxy();
-    let (kill_tx, kill_rx) = crossbeam_channel::unbounded();
-    let (ops_tx, ops_rx) = crossbeam_channel::unbounded();
+    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
 
     let _monitor_thread = spawn_monitor_thread(proxy.clone(), config.clone());
     let _menu_thread = spawn_menu_listener(proxy.clone());
-    let _kill_worker = spawn_kill_worker(kill_rx, proxy.clone());
-    let _ops_worker = spawn_ops_worker(ops_rx, proxy.clone());
+    let _worker = spawn_worker(worker_rx, proxy.clone());
 
     let icon = create_icon(config.inactive_color).context("failed to create tray icon image")?;
     let initial_menu = build_menu_with_context(&state).context("failed to build initial menu")?;
@@ -141,8 +140,7 @@ fn main() -> Result<()> {
         .context("failed to show tray icon")?;
 
     update_tray_display(&tray_icon, &state);
-    let mut kill_sender: Option<Sender<KillCommand>> = Some(kill_tx);
-    let mut ops_sender: Option<Sender<OpsCommand>> = Some(ops_tx);
+    let mut worker_sender: Option<Sender<WorkerCommand>> = Some(worker_tx);
 
     #[allow(deprecated)]
     let run_result = event_loop.run(move |event, event_loop| match event {
@@ -155,6 +153,8 @@ fn main() -> Result<()> {
                 state.processes = processes;
                 // Refresh docker port map when we have listeners
                 state.docker_port_map = query_docker_port_map().unwrap_or_default();
+                // Refresh brew services map when we have listeners
+                state.brew_services_map = query_brew_services_map().unwrap_or_default();
                 // Derive project info in best-effort mode
                 refresh_projects_for(&mut state);
                 // Clean up stale cache entries for terminated processes
@@ -180,21 +180,19 @@ fn main() -> Result<()> {
                 }
                 MenuAction::KillPid { pid, .. } => {
                     if let Some(target) = describe_pid(pid, &state.processes) {
-                        if let Some(sender) = kill_sender.as_ref() {
-                            if let Err(err) = sender.send(KillCommand::KillPid(target)) {
+                        if let Some(sender) = worker_sender.as_ref() {
+                            if let Err(err) = sender.send(WorkerCommand::KillPid(target)) {
                                 let feedback = KillFeedback::error(format!(
                                     "Unable to dispatch kill command: {}",
                                     err
                                 ));
-                                kill_sender = None;
+                                worker_sender = None;
                                 state.last_feedback = Some(feedback);
                                 update_tray_display(&tray_icon, &state);
                             }
                         } else {
-                            let feedback = KillFeedback::error(format!(
-                                "Kill worker unavailable for PID {}.",
-                                pid
-                            ));
+                            let feedback =
+                                KillFeedback::error(format!("Worker unavailable for PID {}.", pid));
                             state.last_feedback = Some(feedback);
                             update_tray_display(&tray_icon, &state);
                         }
@@ -213,19 +211,19 @@ fn main() -> Result<()> {
                             "No dev port listeners to terminate.".to_string(),
                         ));
                         update_tray_display(&tray_icon, &state);
-                    } else if let Some(sender) = kill_sender.as_ref() {
-                        if let Err(err) = sender.send(KillCommand::KillAll(targets)) {
+                    } else if let Some(sender) = worker_sender.as_ref() {
+                        if let Err(err) = sender.send(WorkerCommand::KillAll(targets)) {
                             let feedback = KillFeedback::error(format!(
                                 "Unable to dispatch kill-all command: {}",
                                 err
                             ));
-                            kill_sender = None;
+                            worker_sender = None;
                             state.last_feedback = Some(feedback);
                             update_tray_display(&tray_icon, &state);
                         }
                     } else {
                         let feedback = KillFeedback::error(
-                            "Kill worker unavailable for batch request.".to_string(),
+                            "Worker unavailable for batch request.".to_string(),
                         );
                         state.last_feedback = Some(feedback);
                         update_tray_display(&tray_icon, &state);
@@ -235,13 +233,13 @@ fn main() -> Result<()> {
                     event_loop.exit();
                 }
                 MenuAction::DockerStop { container } => {
-                    if let Some(sender) = ops_sender.as_ref() {
-                        let _ = sender.send(OpsCommand::DockerStop { container });
+                    if let Some(sender) = worker_sender.as_ref() {
+                        let _ = sender.send(WorkerCommand::DockerStop { container });
                     }
                 }
                 MenuAction::BrewStop { service } => {
-                    if let Some(sender) = ops_sender.as_ref() {
-                        let _ = sender.send(OpsCommand::BrewStop { service });
+                    if let Some(sender) = worker_sender.as_ref() {
+                        let _ = sender.send(WorkerCommand::BrewStop { service });
                     }
                 }
                 MenuAction::Snooze30m => {
@@ -263,8 +261,7 @@ fn main() -> Result<()> {
             }
         },
         Event::LoopExiting => {
-            kill_sender.take();
-            ops_sender.take();
+            worker_sender.take();
         }
         _ => {}
     });
@@ -335,42 +332,26 @@ fn spawn_menu_listener(proxy: EventLoopProxy<UserEvent>) -> thread::JoinHandle<(
     })
 }
 
-fn spawn_kill_worker(
-    rx: Receiver<KillCommand>,
+fn spawn_worker(
+    rx: Receiver<WorkerCommand>,
     proxy: EventLoopProxy<UserEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for command in rx.iter() {
             let should_continue = match command {
-                KillCommand::KillPid(target) => handle_single_kill(&proxy, target),
-                KillCommand::KillAll(targets) => handle_batch_kill(&proxy, targets),
+                WorkerCommand::KillPid(target) => handle_single_kill(&proxy, target),
+                WorkerCommand::KillAll(targets) => handle_batch_kill(&proxy, targets),
+                WorkerCommand::DockerStop { container } => {
+                    let feedback = run_docker_stop(&container);
+                    proxy.send_event(UserEvent::KillFeedback(feedback)).is_ok()
+                }
+                WorkerCommand::BrewStop { service } => {
+                    let feedback = run_brew_stop(&service);
+                    proxy.send_event(UserEvent::KillFeedback(feedback)).is_ok()
+                }
             };
             if !should_continue {
                 break;
-            }
-        }
-    })
-}
-
-fn spawn_ops_worker(
-    rx: Receiver<OpsCommand>,
-    proxy: EventLoopProxy<UserEvent>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        for command in rx.iter() {
-            match command {
-                OpsCommand::DockerStop { container } => {
-                    let feedback = run_docker_stop(&container);
-                    if proxy.send_event(UserEvent::KillFeedback(feedback)).is_err() {
-                        break;
-                    }
-                }
-                OpsCommand::BrewStop { service } => {
-                    let feedback = run_brew_stop(&service);
-                    if proxy.send_event(UserEvent::KillFeedback(feedback)).is_err() {
-                        break;
-                    }
-                }
             }
         }
     })
@@ -797,8 +778,12 @@ fn build_menu_with_context(state: &AppState) -> Result<Menu> {
                     let did = format!("{}{}", MENU_ID_DOCKER_STOP_PREFIX, dc.name);
                     let ditem = MenuItem::with_id(&did, &dlabel, true, None);
                     menu.append(&ditem)?;
-                } else if let Some(service) = map_brew_service_from_cmd(&process.command) {
-                    // Brew-aware: show "Stop via brew" option
+                } else if let Some(service) = get_brew_managed_service(
+                    &process.command,
+                    process.port,
+                    &state.brew_services_map,
+                ) {
+                    // Brew-aware: show "Stop via brew" option (only if actually managed by brew)
                     let blabel = format!("Stop via brew {}", service);
                     let bid = format!("{}{}", MENU_ID_BREW_STOP_PREFIX, service);
                     let bitem = MenuItem::with_id(&bid, &blabel, true, None);
@@ -1014,6 +999,46 @@ fn query_docker_port_map() -> Result<HashMap<u16, DockerContainerInfo>> {
     Ok(map)
 }
 
+fn query_brew_services_map() -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    let out = Command::new("brew").args(["services", "list"]).output();
+    let out = match out {
+        Ok(o) => o,
+        Err(err) => {
+            warn!("Brew command failed (brew not installed?): {}", err);
+            return Ok(map);
+        }
+    };
+    if !out.status.success() {
+        warn!(
+            "Brew services list command failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return Ok(map);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // Parse brew services list output
+    // Format: Name    Status    User    File
+    // Skip header line
+    for (idx, line) in stdout.lines().enumerate() {
+        if idx == 0 {
+            // Skip header
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let name = parts[0].to_string();
+        let status = parts[1].to_string();
+
+        log::debug!("Brew service detected: {} -> {}", name, status);
+        map.insert(name, status);
+    }
+    Ok(map)
+}
+
 fn map_brew_service_from_cmd(cmd: &str) -> Option<String> {
     let lc = cmd.to_lowercase();
     if lc.contains("redis") {
@@ -1029,6 +1054,39 @@ fn map_brew_service_from_cmd(cmd: &str) -> Option<String> {
         return Some("mongodb-community".into());
     }
     None
+}
+
+fn get_brew_managed_service(
+    cmd: &str,
+    port: u16,
+    brew_services_map: &HashMap<String, String>,
+) -> Option<String> {
+    // First, pattern match to identify what service this might be
+    let potential_service = map_brew_service_from_cmd(cmd)?;
+
+    // Then verify it's actually managed by brew and running
+    if let Some(status) = brew_services_map.get(&potential_service)
+        && status == "started"
+    {
+        // Verify the port matches the expected default port for this brew service
+        // This prevents showing "Stop via brew" for manually-started instances on non-default ports
+        let expected_port = get_default_port_for_service(&potential_service);
+        if Some(port) == expected_port {
+            return Some(potential_service);
+        }
+    }
+
+    None
+}
+
+fn get_default_port_for_service(service: &str) -> Option<u16> {
+    match service {
+        "redis" => Some(6379),
+        "postgresql" => Some(5432),
+        "mysql" => Some(3306),
+        "mongodb-community" => Some(27017),
+        _ => None,
+    }
 }
 
 fn run_docker_stop(container: &str) -> KillFeedback {
@@ -1204,13 +1262,9 @@ enum MenuAction {
 }
 
 #[derive(Clone, Debug)]
-enum KillCommand {
+enum WorkerCommand {
     KillPid(KillTarget),
     KillAll(Vec<KillTarget>),
-}
-
-#[derive(Clone, Debug)]
-enum OpsCommand {
     DockerStop { container: String },
     BrewStop { service: String },
 }
@@ -1259,6 +1313,7 @@ struct AppState {
     config: Config,
     project_cache: HashMap<i32, ProjectInfo>,
     docker_port_map: HashMap<u16, DockerContainerInfo>,
+    brew_services_map: HashMap<String, String>, // service_name -> status
     snooze_until: Option<Instant>,
 }
 
