@@ -51,31 +51,47 @@ Edit via menu: **Edit Configuration** opens in default text editor.
 
 ## Architecture
 
-### Single-File Design
-Entire app lives in `src/main.rs` (~1286 lines). Intentional simplicity for a focused utility.
+### Module Organization
+Domain-driven modular architecture with clear separation of concerns:
+
+```
+src/
+├── main.rs              # Entry point
+├── lib.rs               # Module exports
+├── app.rs               # Application orchestration, event loop
+├── config.rs            # Configuration management (~/.macport.json)
+├── model.rs             # Core data structures (AppState, ProcessInfo)
+├── notify.rs            # macOS notification integration
+├── process/
+│   ├── ports.rs         # Port scanning via lsof
+│   └── kill.rs          # Process termination logic
+├── ui/
+│   ├── icon.rs          # Tray icon rendering
+│   └── menu.rs          # Menu construction and updates
+└── integrations/
+    ├── docker.rs        # Docker container detection
+    └── brew.rs          # Homebrew service detection
+```
 
 ### Threading Model
 Four concurrent threads communicate via channels and event loop proxy:
 
 1. **Main Loop** (winit): UI events, tray updates, state orchestration
-2. **Monitor Thread**: Polls ports every 2s using `lsof`, detects Docker containers via `docker ps`, sends `ProcessesUpdated` events
-3. **Menu Listener**: Converts menu clicks to `MenuAction` events
-4. **Kill Worker**: Executes termination commands (process kill, Docker stop, Homebrew stop)
+2. **Monitor Thread**: Polls ports every 2s via `process/ports.rs`, detects Docker/Brew services
+3. **Menu Listener**: Converts menu clicks to actions
+4. **Kill Worker**: Executes termination via `process/kill.rs`
 
-### State Management
-`AppState` tracks:
-- Active processes (`ProcessInfo`: port, pid, command)
-- Docker containers mapped to ports (`docker_port_map`)
-- Project metadata cache (git repo detection for context)
-- Last action feedback (shown in tooltip)
-- Snooze state (temporarily disable monitoring)
+### Core Responsibilities
 
-### Process Termination
-Graceful shutdown sequence in `terminate_pid`:
-1. Check existence (`kill(pid, None)`)
-2. SIGTERM → wait 2s (polls every 200ms)
-3. SIGKILL → wait 1s (if still alive)
-4. Return outcome: Success, AlreadyExited, PermissionDenied, TimedOut, Failed
+**app.rs**: Event loop orchestration, thread management, state coordination
+**config.rs**: Load/save user preferences, default port ranges
+**model.rs**: `AppState` (processes, Docker/Brew mappings, project cache, snooze state)
+**process/ports.rs**: Parse `lsof` output, map ports to PIDs
+**process/kill.rs**: Graceful shutdown (SIGTERM → 2s → SIGKILL → 1s)
+**ui/menu.rs**: Dynamic menu with process/Docker/Brew items
+**ui/icon.rs**: Template-based icon with configurable colors
+**integrations/docker.rs**: Map container names to exposed ports
+**integrations/brew.rs**: Detect and verify Homebrew services on ports
 
 ### Menu Actions
 - **Kill [process]**: Terminate specific PID
@@ -83,15 +99,8 @@ Graceful shutdown sequence in `terminate_pid`:
 - **Stop [docker container]**: `docker stop <container>`
 - **Stop [brew service]**: `brew services stop <service>`
 - **Snooze 30m**: Pause monitoring temporarily
-- **Edit Configuration**: Open `~/.macport.json` in text editor
+- **Edit Configuration**: Open `~/.macport.json`
 - **Quit**: Exit app
-
-### Platform Integration
-- Uses `lsof` for port detection (macOS/Unix)
-- Uses `ps` for process name resolution
-- Uses `osascript` for native macOS notifications
-- Icon is template-based (auto-adapts to light/dark mode)
-- Dynamic icon coloring based on config
 
 ## Default Port Ranges
 
@@ -124,21 +133,29 @@ MAX_TOOLTIP_ENTRIES = 5      // Max displayed in tooltip
 ## Common Patterns
 
 ### Adding a monitored port range
-Edit `~/.macport.json` via menu or directly. Changes require restart.
+Edit `~/.macport.json` via menu or directly. Changes require restart. Default ranges defined in `config.rs`.
 
-### Docker integration
-App auto-detects Docker containers exposing ports, displays container names in menu, allows stopping containers instead of killing host processes.
+### Extending integrations
+Add new service detection to `src/integrations/`. Follow pattern: detection function, port mapping, menu integration.
 
-### Notification behavior
-Controlled by `notifications_enabled` in config. Uses macOS `osascript` for native notifications on kills/errors.
-
-### Debugging port detection
-Run with `RUST_LOG=debug cargo run` to see `lsof` output parsing and Docker container detection.
+### Debugging
+- **Port detection**: `RUST_LOG=debug cargo run` shows `lsof` parsing
+- **Docker/Brew**: Debug logs show container/service discovery
+- **Process termination**: Logs show SIGTERM/SIGKILL sequence
 
 ## Development Notes
 
-- Pre-commit hook auto-formats code (install with `./scripts/install-hooks.sh`)
-- Menu IDs use prefixes: `process_`, `docker_stop_`, `brew_stop_` for routing
-- Identifiers sanitized to avoid injection (`sanitize_identifier`)
-- Icon updates happen on state changes, not on timer
-- Project cache prevents repeated git repo lookups for same PIDs
+- Pre-commit hook auto-formats code (install via `./scripts/install-hooks.sh`)
+- Menu IDs use prefixes: `process_`, `docker_stop_`, `brew_stop_` for action routing
+- All external identifiers sanitized to prevent injection attacks
+- Icon updates on state changes (not timer-based) for efficiency
+- Project cache in `model.rs` prevents repeated git lookups
+- Brew service detection verifies actual port binding (not just service status)
+
+## Coding Principles
+
+- **Module boundaries**: Keep domain logic isolated (process/, ui/, integrations/)
+- **Error handling**: Use `anyhow::Result` for operations that can fail
+- **Logging**: Use `log::debug!` for diagnostics, `log::error!` for failures
+- **Thread safety**: Communicate via channels, minimize shared state
+- **Platform commands**: Sanitize all inputs to `lsof`, `docker`, `brew`, `osascript`
