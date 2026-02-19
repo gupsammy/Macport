@@ -173,11 +173,72 @@ fn validate_config(config: &Config) -> Result<()> {
             config.monitoring.poll_interval_secs
         );
     }
+
+    if config.monitoring.port_ranges.is_empty() {
+        anyhow::bail!("port_ranges must contain at least one range");
+    }
+
     // Validate port ranges (u16 already enforces 0-65535)
     for (start, end) in &config.monitoring.port_ranges {
         if start > end {
             anyhow::bail!("invalid port range: start ({}) > end ({})", start, end);
         }
     }
+
+    let mut sorted_ranges = config.monitoring.port_ranges.clone();
+    sorted_ranges.sort_unstable_by_key(|(start, end)| (*start, *end));
+
+    for ranges in sorted_ranges.windows(2) {
+        let (prev_start, prev_end) = ranges[0];
+        let (next_start, next_end) = ranges[1];
+        if next_start <= prev_end {
+            anyhow::bail!(
+                "overlapping port ranges: ({}, {}) overlaps with ({}, {})",
+                prev_start,
+                prev_end,
+                next_start,
+                next_end
+            );
+        }
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_ranges(ranges: Vec<(u16, u16)>) -> Config {
+        let mut config = Config::default();
+        config.monitoring.port_ranges = ranges;
+        config
+    }
+
+    #[test]
+    fn validate_config_rejects_empty_port_ranges() {
+        let config = config_with_ranges(vec![]);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(err.contains("port_ranges must contain at least one range"));
+    }
+
+    #[test]
+    fn validate_config_rejects_overlapping_ranges() {
+        let config = config_with_ranges(vec![(3000, 3010), (3005, 3015)]);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(err.contains("overlapping port ranges"));
+    }
+
+    #[test]
+    fn validate_config_rejects_overlapping_ranges_when_unsorted() {
+        let config = config_with_ranges(vec![(4000, 4010), (3005, 3015), (3000, 3010)]);
+        let err = validate_config(&config).unwrap_err().to_string();
+        assert!(err.contains("overlapping port ranges"));
+    }
+
+    #[test]
+    fn validate_config_allows_non_overlapping_ranges() {
+        let config = config_with_ranges(vec![(3000, 3010), (3011, 3020), (8080, 8080)]);
+        assert!(validate_config(&config).is_ok());
+    }
 }
