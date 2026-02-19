@@ -40,20 +40,20 @@ pub fn query_docker_port_map() -> Result<HashMap<u16, DockerContainerInfo>> {
             if seg.is_empty() {
                 continue;
             }
-            if let Some((left, _right)) = seg.split_once("->")
-                && let Some((_, host)) = left.rsplit_once(':')
-            {
-                if host.contains('-') {
-                    continue;
-                }
-                if let Ok(p) = host.parse::<u16>() {
-                    map.insert(
-                        p,
-                        DockerContainerInfo {
-                            name: name.clone(),
-                            id: id.clone(),
-                        },
-                    );
+            if let Some((left, _right)) = seg.split_once("->") {
+                if let Some((_, host)) = left.rsplit_once(':') {
+                    if host.contains('-') {
+                        continue;
+                    }
+                    if let Ok(p) = host.parse::<u16>() {
+                        map.insert(
+                            p,
+                            DockerContainerInfo {
+                                name: name.clone(),
+                                id: id.clone(),
+                            },
+                        );
+                    }
                 }
             }
         }
