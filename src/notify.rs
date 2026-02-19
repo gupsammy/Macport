@@ -73,11 +73,11 @@ fn notify(title: &str, body: &str) {
 fn notify_with_terminal_notifier(title: &str, body: &str) {
     let cmd = find_command("terminal-notifier");
     // Check if terminal-notifier exists (find_command falls back to name if not found)
-    if !std::path::Path::new(cmd).exists() && Command::new(cmd).arg("-help").output().is_err() {
+    if !std::path::Path::new(&cmd).exists() && Command::new(&cmd).arg("-help").output().is_err() {
         return;
     }
 
-    let _ = Command::new(cmd)
+    let _ = Command::new(&cmd)
         .args([
             "-title", title, "-message", body, "-sender", BUNDLE_ID, "-sound", "Glass",
         ])
@@ -87,14 +87,14 @@ fn notify_with_terminal_notifier(title: &str, body: &str) {
 /// Notify user that an update is available with clickable download link
 pub fn notify_update_available(version: &str, download_url: &str) {
     let cmd = find_command("terminal-notifier");
-    if !std::path::Path::new(cmd).exists() && Command::new(cmd).arg("-help").output().is_err() {
+    if !std::path::Path::new(&cmd).exists() && Command::new(&cmd).arg("-help").output().is_err() {
         return;
     }
 
     let title = format!("PortKiller v{} Available", version);
     let body = "Click to download the update";
 
-    let _ = Command::new(cmd)
+    let _ = Command::new(&cmd)
         .args([
             "-title",
             &title,
