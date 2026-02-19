@@ -23,7 +23,7 @@ use crate::model::*;
 use crate::notify::{maybe_notify_changes, notify_update_available};
 use crate::process::kill::terminate_pid;
 use crate::process::ports::scan_ports;
-use crate::ui::icon::{IconVariant, create_template_icon};
+use crate::ui::icon::{create_template_icon, IconVariant};
 use crate::ui::menu::{
     build_menu_with_context, build_tooltip, collect_targets_for_all, format_command_label,
     parse_menu_action,
@@ -936,10 +936,10 @@ fn is_safe_path(path: &std::path::Path) -> bool {
         Err(_) => return false,
     };
     // Allow paths under home directory
-    if let Ok(home) = std::env::var("HOME")
-        && canonical.starts_with(&home)
-    {
-        return true;
+    if let Ok(home) = std::env::var("HOME") {
+        if canonical.starts_with(&home) {
+            return true;
+        }
     }
     // Allow /tmp and /var/folders (macOS temp)
     // Note: On macOS, /tmp -> /private/tmp and /var -> /private/var after canonicalization

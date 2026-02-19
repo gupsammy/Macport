@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 use crate::model::ProcessInfo;
 
@@ -42,16 +42,16 @@ pub fn scan_ports(port_ranges: &[(u16, u16)]) -> Result<Vec<ProcessInfo>> {
                 current_cmd = Some(val.trim().to_string());
             }
             "n" => {
-                if let (Some(pid), Some(cmd)) = (current_pid, current_cmd.as_ref())
-                    && let Some(port) = parse_port_from_lsof(val.trim())
-                    && in_ranges(port, port_ranges)
-                    && seen.insert((port, pid))
-                {
-                    results.push(ProcessInfo {
-                        port,
-                        pid,
-                        command: cmd.clone(),
-                    });
+                if let (Some(pid), Some(cmd)) = (current_pid, current_cmd.as_ref()) {
+                    if let Some(port) = parse_port_from_lsof(val.trim()) {
+                        if in_ranges(port, port_ranges) && seen.insert((port, pid)) {
+                            results.push(ProcessInfo {
+                                port,
+                                pid,
+                                command: cmd.clone(),
+                            });
+                        }
+                    }
                 }
             }
             _ => {}

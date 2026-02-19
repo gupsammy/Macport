@@ -49,12 +49,12 @@ pub fn get_brew_managed_service(
     brew_services_map: &HashMap<String, String>,
 ) -> Option<String> {
     let potential_service = map_brew_service_from_cmd(cmd)?;
-    if let Some(status) = brew_services_map.get(&potential_service)
-        && status == "started"
-    {
-        let expected_port = get_default_port_for_service(&potential_service);
-        if Some(port) == expected_port {
-            return Some(potential_service);
+    if let Some(status) = brew_services_map.get(&potential_service) {
+        if status == "started" {
+            let expected_port = get_default_port_for_service(&potential_service);
+            if Some(port) == expected_port {
+                return Some(potential_service);
+            }
         }
     }
     None
